@@ -14,215 +14,199 @@
  * for the specific language governing rights and limitations under the
  * License.
  *
- * The Original Code is FreeSWITCH Modular Media Switching Software Library / Soft-Switch Application
+ * The Original Code is FreeSWITCH Modular Media Switching Software Library / SKEL codec module
  *
  * The Initial Developer of the Original Code is
- * Anthony Minessale II <anthm@freeswitch.org>
+ * Moises Silva <moy@sangoma.com>
  * Portions created by the Initial Developer are Copyright (C)
  * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
- * 
- * Anthony Minessale II <anthm@freeswitch.org>
- * Neal Horman <neal at wanlink dot com>
+ * Moises Silva <moy@sangoma.com>
  *
- *
- * mod_skel.c -- Framework Demo Module
+ * mod_skel_codec -- FreeSWITCH skeleton codec
  *
  */
+
+/*
+ * Other source of reference for module building: 
+ * src/mod/applications/mod_skel/mod_skel.c
+ * http://files.freeswitch.org/cluecon_2009/presentations/Silva_FreeSWITCH_Modules_For_Asterisk_Devs.ppt
+ * You can load this codec with this command:
+ * freeswitch@localhost> load mod_skel_codec
+ * 2009-09-23 12:56:55.616573 [CONSOLE] switch_loadable_module.c:889 Successfully Loaded [mod_skel_codec]
+ * 2009-09-23 12:56:55.616573 [NOTICE] switch_loadable_module.c:182 Adding Codec 'SKEL' (SKEL 8.0k) 8000hz 20ms
+ * 2009-09-23 12:56:55.616573 [NOTICE] switch_loadable_module.c:270 Adding API Function 'skel_sayhi'
+ *
+ * Then test the API with:
+ * freeswitch@localhost.localdomain> skel_sayhi
+ * API CALL [skel_sayhi()] output:
+ * Hello, I am the skeleton codec and I am not useful for users ... I feel so depressed :-(
+ * */
 #include <switch.h>
 
-/* Prototypes */
-SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_skel_shutdown);
-SWITCH_MODULE_RUNTIME_FUNCTION(mod_skel_runtime);
-SWITCH_MODULE_LOAD_FUNCTION(mod_skel_load);
+/* prototype of the module loading function, this function will be called when loading the shared object/DLL into FS core */
+SWITCH_MODULE_LOAD_FUNCTION(mod_skel_codec_load);
 
-/* SWITCH_MODULE_DEFINITION(name, load, shutdown, runtime) 
- * Defines a switch_loadable_module_function_table_t and a static const char[] modname
- */
-SWITCH_MODULE_DEFINITION(mod_skel, mod_skel_load, mod_skel_shutdown, NULL);
+/* Module definition structure, this macro does something like
+ * static const char modname[] = "mod_skel_codec";
+ * switch_loadable_module_function_table_t mod_skel_codec_module_interface = { load, shutdown, runtime, flags };
+ * */
+SWITCH_MODULE_DEFINITION(mod_skel_codec, mod_skel_codec_load, NULL, NULL);
 
-typedef enum {
-	CODEC_NEGOTIATION_GREEDY = 1,
-	CODEC_NEGOTIATION_GENEROUS = 2,
-	CODEC_NEGOTIATION_EVIL = 3
-} codec_negotiation_t;
-
-static struct {
-	char *codec_negotiation_str;
-	codec_negotiation_t codec_negotiation;
-	switch_bool_t sip_trace;
-	int integer;
-} globals;
-
-static switch_status_t config_callback_siptrace(switch_xml_config_item_t *data, switch_config_callback_type_t callback_type, switch_bool_t changed)
-{
-	switch_bool_t value = *(switch_bool_t *) data->ptr;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "In siptrace callback: value %s changed %s\n",
-					  value ? "true" : "false", changed ? "true" : "false");
-
-
-	/*
-	   if ((callback_type == CONFIG_LOG || callback_type == CONFIG_RELOAD) && changed) {
-	   nua_set_params(((sofia_profile_t*)data->functiondata)->nua, TPTAG_LOG(value), TAG_END());
-	   } 
-	 */
-
-	return SWITCH_STATUS_SUCCESS;
-}
-
-static switch_xml_config_string_options_t config_opt_codec_negotiation = { NULL, 0, "greedy|generous|evil" };
-
-/* enforce_min, min, enforce_max, max */
-static switch_xml_config_int_options_t config_opt_integer = { SWITCH_TRUE, 0, SWITCH_TRUE, 10 };
-static switch_xml_config_enum_item_t config_opt_codec_negotiation_enum[] = {
-	{"greedy", CODEC_NEGOTIATION_GREEDY},
-	{"generous", CODEC_NEGOTIATION_GENEROUS},
-	{"evil", CODEC_NEGOTIATION_EVIL},
-	{NULL, 0}
+/* Typically you will have a context structure to track your resources */
+struct skel_context {
+	/* dummy counters to check how many times the encode/decode routines are called */
+	int32_t encodes;
+	int32_t decodes;
 };
 
-static switch_xml_config_item_t instructions[] = {
-	/* parameter name        type                 reloadable   pointer                         default value     options structure */
-	SWITCH_CONFIG_ITEM("codec-negotiation-str", SWITCH_CONFIG_STRING, CONFIG_RELOADABLE, &globals.codec_negotiation_str, "greedy",
-					   &config_opt_codec_negotiation,
-					   "greedy|generous|evil", "Specifies the codec negotiation scheme to be used."),
-	SWITCH_CONFIG_ITEM("codec-negotiation", SWITCH_CONFIG_ENUM, CONFIG_RELOADABLE, &globals.codec_negotiation, (void *) CODEC_NEGOTIATION_GREEDY,
-					   &config_opt_codec_negotiation_enum,
-					   "greedy|generous|evil", "Specifies the codec negotiation scheme to be used."),
-	SWITCH_CONFIG_ITEM_CALLBACK("sip-trace", SWITCH_CONFIG_BOOL, CONFIG_RELOADABLE, &globals.sip_trace, (void *) SWITCH_FALSE,
-								(switch_xml_config_callback_t) config_callback_siptrace, NULL,
-								"yes|no", "If enabled, print out sip messages on the console."),
-	SWITCH_CONFIG_ITEM("integer", SWITCH_CONFIG_INT, CONFIG_RELOADABLE, &globals.integer, (void *) 100, &config_opt_integer,
-					   NULL, NULL),
-	SWITCH_CONFIG_ITEM_END()
-};
-
-static switch_status_t do_config(switch_bool_t reload)
+static switch_status_t switch_skel_init(switch_codec_t *codec, switch_codec_flag_t flags, const switch_codec_settings_t *codec_settings)
 {
-	memset(&globals, 0, sizeof(globals));
+	uint32_t encoding, decoding;
+	struct skel_context *context = NULL;
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Skel init called.\n");
 
-	if (switch_xml_config_parse_module_settings("skel.conf", reload, instructions) != SWITCH_STATUS_SUCCESS) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Could not open skel.conf\n");
+	encoding = (flags & SWITCH_CODEC_FLAG_ENCODE);
+	decoding = (flags & SWITCH_CODEC_FLAG_DECODE);
+
+	if (!(encoding || decoding)) {
 		return SWITCH_STATUS_FALSE;
 	}
 
-	return SWITCH_STATUS_SUCCESS;
-}
-
-SWITCH_STANDARD_API(skel_function)
-{
-	switch_event_t *event;
-	unsigned char frame_buffer[8192] = {0};
-
-	do_config(SWITCH_TRUE);
-
-	if (switch_event_create(&event, SWITCH_EVENT_TRAP) == SWITCH_STATUS_SUCCESS) {
-		switch_size_t len = 0;
-		int x = 0;
-
-		/* populate the event with some headers */
-
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "testing", "true");
-		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "foo", "bar");
-
-		for (x = 0; x < 10; x++) {
-			char name[128];
-			switch_snprintf(name, sizeof(name), "test-header-%d", x);
-			switch_event_add_header(event, SWITCH_STACK_BOTTOM, name, "value-%d", x);
-		}
-		
-
-		/* Nothing up my sleeve, here is the event */
-
-		DUMP_EVENT(event);
-
-
-		/* ok, serialize it into frame_buffer and destroy the event *poof* */
-		len = sizeof(frame_buffer);
-		switch_event_binary_serialize(event, (void *)frame_buffer, &len);
-		switch_event_destroy(&event);
-
-
-		/* wave the magic wand and feed frame_buffer to deserialize */
-		switch_event_binary_deserialize(&event, (void *)frame_buffer, len, SWITCH_FALSE);
-
-		/* TA DA */
-		DUMP_EVENT(event);
-
-		switch_event_destroy(&event);
+	/* alloc memory for your internal data structure, no need to free it on destroy, since is allocated from the pool and the core will take care of it */
+	if (!(context = switch_core_alloc(codec->memory_pool, sizeof(*context)))) {
+		return SWITCH_STATUS_FALSE;
 	}
 
+	codec->private_info = context;
+	context->encodes = 0;
+	context->decodes = 0;
 
 	return SWITCH_STATUS_SUCCESS;
 }
 
-static void mycb(switch_core_session_t *session, switch_channel_callstate_t callstate, switch_device_record_t *drec)
+/* see src/switch_core_io.c (search switch_core_codec_encode/decode) for more details in expected return codes for the codec interface */
+/* sample return codes, success and error are the typical:
+ * SWITCH_STATUS_SUCCESS, success
+ * SWITCH_STATUS_FALSE, error
+ * SWITCH_STATUS_RESAMPLE, resampling needed
+ * SWITCH_STATUS_NOOP, NOOP indicates that the audio in is already the same as the audio out, so no conversion was necessary.
+ * SWITCH_STATUS_NOT_INITALIZED, failure to init, you can use this to init on first usage and no in switch_skel_init?
+ * */
+static switch_status_t switch_skel_encode(switch_codec_t *codec, switch_codec_t *other_codec,	/* codec that was used by the other side */
+										  void *decoded_data,	/* decoded data that we must encode */
+										  uint32_t decoded_data_len /* decoded data length */ ,
+										  uint32_t decoded_rate /* rate of the decoded data */ ,
+										  void *encoded_data,	/* here we will store the encoded data */
+										  uint32_t *encoded_data_len,	/* here we will set the length of the encoded data */
+										  uint32_t *encoded_rate /* here we will set the rate of the encoded data */ ,
+										  unsigned int *flag /* frame flag, see switch_frame_flag_enum_t */ )
 {
-	switch_channel_t *channel = switch_core_session_get_channel(session);
-
-	switch_log_printf(SWITCH_CHANNEL_CHANNEL_LOG(channel), SWITCH_LOG_CRIT, 
-					  "%s device: %s\nState: %s Dev State: %s/%s Total:%u Offhook:%u Active:%u Held:%u Hungup:%u Dur: %u %s\n", 
-					  switch_channel_get_name(channel),
-					  drec->device_id,
-					  switch_channel_callstate2str(callstate),
-					  switch_channel_device_state2str(drec->last_state),
-					  switch_channel_device_state2str(drec->state),
-					  drec->stats.total,
-					  drec->stats.offhook,
-					  drec->stats.active,
-					  drec->stats.held,
-					  drec->stats.hup,
-					  drec->active_stop ? (uint32_t)(drec->active_stop - drec->active_start) / 1000 : 0,
-					  switch_channel_test_flag(channel, CF_FINAL_DEVICE_LEG) ? "FINAL LEG" : "");
-
+	struct skel_context *context = codec->private_info;
+	/* FS core checks the actual samples per second and microseconds per packet to determine the buffer size in the worst case scenario, no need to check
+	 * whether the buffer passed in by the core (encoded_data) will be big enough */
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Skel encode called.\n");
+	memcpy(encoded_data, decoded_data, decoded_data_len);
+	*encoded_data_len = decoded_data_len;
+	*encoded_rate = decoded_rate;
+	context->encodes++;
+	return SWITCH_STATUS_SUCCESS;
 }
 
-
-/* Macro expands to: switch_status_t mod_skel_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool) */
-SWITCH_MODULE_LOAD_FUNCTION(mod_skel_load)
+/* sample return codes, success and error are the typical:
+ * SWITCH_STATUS_SUCCESS, success
+ * SWITCH_STATUS_FALSE, error
+ * SWITCH_STATUS_RESAMPLE, resampling needed
+ * SWITCH_STATUS_BREAK, do nothing else with the frame but dont report error, seems to be only useful for mod_g729
+ * SWITCH_STATUS_NOOP, NOOP indicates that the audio in is already the same as the audio out, so no conversion was necessary.
+ * SWITCH_STATUS_NOT_INITALIZED, failure to init, you can use this to init on first usage and no in switch_skel_init?
+ * */
+static switch_status_t switch_skel_decode(switch_codec_t *codec,	/* codec session handle */
+										  switch_codec_t *other_codec,	/* what is this? */
+										  void *encoded_data,	/* data that we must decode into slinear and put it in decoded_data */
+										  uint32_t encoded_data_len,	/* length in bytes of the encoded data */
+										  uint32_t encoded_rate,	/* at which rate was the data encoded */
+										  void *decoded_data,	/* buffer where we must put the decoded data */
+										  uint32_t *decoded_data_len,	/* we must set this value to the size of the decoded data */
+										  uint32_t *decoded_rate,	/* rate of the decoded data */
+										  unsigned int *flag /* frame flag, see switch_frame_flag_enum_t */ )
 {
+	struct skel_context *context = codec->private_info;
+	/* FS core checks the actual samples per second and microseconds per packet to determine the buffer size in the worst case scenario, no need to check
+	 * whether the buffer passed in by the core will be enough */
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Skel decode called.\n");
+	memcpy(decoded_data, encoded_data, encoded_data_len);
+	*decoded_data_len = encoded_data_len;
+	*decoded_rate = encoded_rate;
+	context->decodes++;
+	return SWITCH_STATUS_SUCCESS;
+}
+
+static switch_status_t switch_skel_destroy(switch_codec_t *codec)
+{
+	/* things that you may do here is closing files, sockets or other resources used during the codec session 
+	 * no need to free memory allocated from the pool though, the owner of the pool takes care of that */
+	struct skel_context *context = codec->private_info;
+	context->encodes = 0;
+	context->decodes = 0;		/* silly, context was allocated in the pool and therefore will be destroyed soon, exact time is not guaranteed though */
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/* A standard API registered by the this codec module, APIs can be executed from CLI, mod_event_socket, or many other interfaces 
+ * any information or actions you want to publish for users on demand is typically exposed through an API */
+SWITCH_STANDARD_API(skel_sayhi)
+/* static switch_status_t skel_sayhi(const char *cmd, switch_core_session_t *session, switch_stream_handle_t *stream) */
+{
+	stream->write_function(stream, "Hello, I am the skeleton codec and I am not useful for users ... I feel so depressed :-( \n");
+	return SWITCH_STATUS_SUCCESS;
+}
+
+/* switch_status_t mod_skel_codec_load(switch_loadable_module_interface_t **module_interface, switch_memory_pool_t *pool) */
+SWITCH_MODULE_LOAD_FUNCTION(mod_skel_codec_load)
+{
+	/* the codec interface that will be registered with the core */
+	switch_codec_interface_t *codec_interface;
+
+	/* the API interface, only needed if you wish to register APIs 
+	 * (like commands exposed through CLI, mod_event_socket or any other FS interface capable of executing APIs) */
 	switch_api_interface_t *api_interface;
-	/* connect my internal structure to the blank pointer passed to me */
+
+	/* The core gives us a blank module interface pointer and a pool of memory, we allocate memory from that pool to create our module interface 
+	 * and set the pointer to that chunk of allocated memory */
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Hello World!\n");
+	/* SWITCH_ADD_CODEC allocates a codec interface structure from the pool the core gave us and adds it to the internal interface list the core keeps, 
+	 * gets a codec id and set the given codec name to it.
+	 * At this point there is an empty shell codec interface registered, but not yet implementations */
+	SWITCH_ADD_CODEC(codec_interface, "SKEL 8.0k");	/* 8.0kbit */
 
-	do_config(SWITCH_FALSE);
+	/* Now add as many codec implementations as needed, typically this is done inside a for loop where the packetization size is 
+	 * incremented (10ms, 20ms, 30ms etc) as needed */
+	switch_core_codec_add_implementation(pool, codec_interface,	/* the codec interface we allocated and we want to register with the core */
+										 SWITCH_CODEC_TYPE_AUDIO,	/* enumeration defining the type of the codec */
+										 0,	/* the IANA code number, ie http://www.iana.org/assignments/rtp-parameters */
+										 "SKEL",	/* the IANA code name */
+										 NULL,	/* default fmtp to send (can be overridden by the init function), fmtp is used in SDP for format specific parameters */
+										 8000,	/* samples transferred per second */
+										 8000,	/* actual samples transferred per second */
+										 8000,	/* bits transferred per second */
+										 20000,	/* for 20ms (milliseconds) frames, 20,000 microseconds and so on, you can register the same codec with different packetization */
+										 160,	/* number of samples per frame, for this dummy implementation is 160, which is the number of samples in 20ms at 8000 samples per second */
+										 320,	/* number of bytes per frame decompressed */
+										 320,	/* number of bytes per frame compressed, since we dont really compress anything, is the same number as per frame decompressed */
+										 1,	/* number of channels represented */
+										 20,	/* number of frames per network packet */
+										 switch_skel_init,	/* function to initialize a codec session using this implementation */
+										 switch_skel_encode,	/* function to encode slinear data into encoded data */
+										 switch_skel_decode,	/* function to decode encoded data into slinear data */
+										 switch_skel_destroy);	/* deinitalize a codec handle using this implementation */
 
-	SWITCH_ADD_API(api_interface, "skel", "Skel API", skel_function, "syntax");
-
-	switch_channel_bind_device_state_handler(mycb, NULL);
-
+	SWITCH_ADD_API(api_interface, "skel_sayhi", "Skel Codec Says Hi", skel_sayhi, NULL);
+	switch_console_set_complete("add skel_sayhi");	/* For CLI completion */
 	/* indicate that the module should continue to be loaded */
 	return SWITCH_STATUS_SUCCESS;
 }
-
-/*
-  Called when the system shuts down
-  Macro expands to: switch_status_t mod_skel_shutdown() */
-SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_skel_shutdown)
-{
-	/* Cleanup dynamically allocated config settings */
-	switch_channel_unbind_device_state_handler(mycb);
-	switch_xml_config_cleanup(instructions);
-	return SWITCH_STATUS_SUCCESS;
-}
-
-
-/*
-  If it exists, this is called in it's own thread when the module-load completes
-  If it returns anything but SWITCH_STATUS_TERM it will be called again automatically
-  Macro expands to: switch_status_t mod_skel_runtime()
-SWITCH_MODULE_RUNTIME_FUNCTION(mod_skel_runtime)
-{
-	while(looping)
-	{
-		switch_cond_next();
-	}
-	return SWITCH_STATUS_TERM;
-}
-*/
 
 /* For Emacs:
  * Local Variables:
@@ -232,5 +216,5 @@ SWITCH_MODULE_RUNTIME_FUNCTION(mod_skel_runtime)
  * c-basic-offset:4
  * End:
  * For VIM:
- * vim:set softtabstop=4 shiftwidth=4 tabstop=4 noet
+ * vim:set softtabstop=4 shiftwidth=4 tabstop=4 noet:
  */
